@@ -15,14 +15,14 @@
 <label>Letter size <input id="fontSize" type="range" min="12" max="22" value="16"><output id="fontSizeValue">16</output></label>
 <label>Residue spacing <input id="spacing" type="range" min="18" max="32" value="18"><output id="spacingValue">18</output></label>
 <label>Row spacing <input id="rowSpace" type="range" min="95" max="165" value="112"><output id="rowSpaceValue">112</output></label>
-<label><input id="numbers" type="checkbox" checked>Residue numbers</label><button id="resetStyle">Reset appearance</button>
+<label><input id="elementNames" type="checkbox" checked>Element names</label><label><input id="numbers" type="checkbox" checked>Residue numbers</label><button id="resetStyle">Reset appearance</button>
 </div><div class="range-editor"><p>Select a letter to edit one residue, or enter a range in the current chain. Structure overrides change the drawing, not your source file.</p><div class="editor-grid">
 <label>From <input id="rangeStart" type="number" aria-label="First residue to edit"></label><label>To <input id="rangeEnd" type="number" aria-label="Last residue to edit"></label>
 <label>Draw as <select id="assignment"><option value="H">α-helix</option><option value="G">3₁₀ helix</option><option value="I">π-helix</option><option value="E">β-strand</option><option value="B">β-bridge</option><option value="T">Turn</option><option value="S">Bend</option><option value="P">Polyproline II</option><option value=".">Loop / unassigned</option></select></label>
 <button id="applyRange">Apply to range</button><button id="undoEdit" disabled>Undo</button><button id="restoreAssignments">Restore file assignments</button></div></div><div id="editStatus" class="edit-status" role="status">No structure overrides.</div></section>
 <section class="panel"><div class="panelhead"><strong id="title">Chain A</strong><div class="legend"><span style="--c:#c65274">Helix</span><span style="--c:#ce920d">β-strand</span><span style="--c:#8293a4">Loop / turn / bend</span></div></div><div class="canvas" id="canvas"></div><div class="detail" id="detail" aria-live="polite">Select a residue to inspect its position and structure. Use left and right arrow keys to move along the sequence.</div></section>
 <details><summary>Paste CIF or a structure table</summary><p class="note">Open a DSSP-annotated .cif or .mmcif file, or paste its contents below. CIF files with a polymer sequence scheme and supported structure ranges also work. The viewer reads existing annotations; it does not calculate DSSP from atomic coordinates. The original whitespace-separated table format is also supported. Raw PDB and classic fixed-width DSSP files are not supported.</p><textarea id="paste" aria-label="CIF or structure table" placeholder="Paste annotated CIF or residue table here"></textarea><button id="load">Load pasted data</button></details>
-<p class="note">Coils represent H / G / I helices; arrows represent E strands and B bridges. Other assignments appear as lines. Wrapped segments continue onto the next row; arrows point toward the C terminus. This is a sequence schematic, not a 3D structure.</p><footer>Files are processed in your browser. No upload service or external libraries.</footer></main>
+<p class="note">Element labels use CIF identifiers: α1 means alpha helix 1; β1 · A means strand 1 in sheet A. Hover over a label for the full identifier. Edited assignments are marked “Edited”. Coils represent H / G / I helices; arrows represent E strands and B bridges. Other assignments appear as lines. Wrapped segments continue onto the next row; arrows point toward the C terminus. This is a sequence schematic, not a 3D structure.</p><footer>Files are processed in your browser. No upload service or external libraries.</footer></main>
 
 <script>
 const $=id=>document.getElementById(id), NS='http://www.w3.org/2000/svg';
@@ -71,6 +71,17 @@ function cifCategories(text){
  for(const [cat,row] of Object.entries(single))(cats[cat]??=[]).push(row);
  return cats;
 }
+function attachElementNames(rows,cats){
+ for(const range of cats._struct_conf||[]){
+  const id=range.id||'',type=range.conf_type_id||'',number=id.match(/(\d+)$/)?.[1]||'';
+  const prefix={HELX_RH_AL_P:'α',HELX_RH_3T_P:'3₁₀-',HELX_RH_PI_P:'π',HELX_LH_PP_P:'PPII-',STRN:'β'}[type];
+  if(!prefix)continue;
+  for(const r of rows)if(r.chain===range.beg_label_asym_id&&r.chain===range.end_label_asym_id&&r.n>=Number(range.beg_label_seq_id)&&r.n<=Number(range.end_label_seq_id)){r.elementId=id;r.elementName=prefix+number;}
+ }
+ for(const range of cats._struct_sheet_range||[])for(const r of rows)if(r.chain===range.beg_label_asym_id&&r.chain===range.end_label_asym_id&&r.n>=Number(range.beg_label_seq_id)&&r.n<=Number(range.end_label_seq_id)){r.sheet=range.sheet_id;r.strandId=range.id;}
+ return rows;
+}
+function labelFor(r){if(r.ss!==r.originalSS)return 'Edited';return r.elementName?(r.elementName+(r.sheet?' · '+r.sheet:'')):''}
 function parseCif(text){
  const cats=cifCategories(text),summary=cats._dssp_struct_summary;
  const validNumber=n=>/^[-+]?\d+$/.test(n||'');
@@ -81,7 +92,7 @@ function parseCif(text){
    if(!Object.hasOwn(names,ss))throw Error(`Unsupported DSSP assignment: ${ss||'missing'}.`);
    return {chain:r.label_asym_id,n:Number(r.label_seq_id),res:r.label_comp_id.toUpperCase(),ss};
   });
-  return {rows,skipped:0,source:'DSSP annotations from CIF · label residue numbering'};
+  return {rows:attachElementNames(rows,cats),skipped:0,source:'DSSP annotations from CIF · label residue numbering'};
  }
  const scheme=cats._pdbx_poly_seq_scheme;
  if(!scheme?.length)throw Error('This CIF has no DSSP summary or polymer sequence scheme. Use a DSSP-annotated CIF, like your supplied file.');
@@ -99,26 +110,38 @@ function parseCif(text){
   for(const residue of rows)if(residue.chain===r.beg_label_asym_id&&residue.n>=first&&residue.n<=last){residue.ss=ss;assigned++}
  }
  if(!assigned)throw Error('The structure annotations do not match the polymer sequence.');
- return {rows,skipped:0,source:'CIF structure ranges · label residue numbering · unannotated residues shown as lines'};
+ return {rows:attachElementNames(rows,cats),skipped:0,source:'CIF structure ranges · label residue numbering · unannotated residues shown as lines'};
 }
 
 function parse(text){return /^\s*(?:#.*\r?\n\s*)?data_/im.test(text)?parseCif(text):parseTable(text)}
 function load(text){try{const result=parse(text);all=result.rows.map(r=>({...r,originalSS:r.ss}));history=[];$('undoEdit').disabled=true;$('rangeStart').value='';$('rangeEnd').value='';$('chain').replaceChildren();for(const c of new Set(all.map(r=>r.chain))){const o=document.createElement('option');o.textContent=c;o.value=c;$('chain').append(o)}$('message').textContent=result.skipped?`${result.skipped} unrecognized line(s) skipped.`:''; $('source').textContent=result.source||'Pasted residue table · supplied residue numbering';render()}catch(e){$('message').textContent=e.message}}
 function el(tag,attrs={},text){const node=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))node.setAttribute(k,v);if(text!==undefined)node.textContent=text;return node}
-function inspect(i,focus=false){selected=i;const r=current[i];$('rangeStart').value=r.n;$('rangeEnd').value=r.n;$('assignment').value=r.ss==='-'?'.':r.ss;$('detail').textContent=`Chain ${r.chain} · Residue ${r.n} · ${r.res} (${aa[r.res]||'X'}) · ${names[r.ss]} · Code ${r.ss}`;document.querySelectorAll('.residue.selected').forEach(n=>n.classList.remove('selected'));const g=$('r'+i);g.classList.add('selected');document.querySelectorAll('.residue').forEach(n=>n.setAttribute('tabindex','-1'));g.setAttribute('tabindex','0');if(focus){g.focus();g.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'})}}
-function render(){if(!all.length){$('stats').replaceChildren();$('title').textContent='Your sequence';$('canvas').textContent='Choose a CIF file, then select Run viewer to create your editable picture.';$('detail').textContent='Your data stays in this browser.';$('export').disabled=true;return}$('export').disabled=false;current=all.filter(r=>r.chain===$('chain').value);selected=-1;const count=current.length,wrap=Number($('wrap').value),step=Math.max(Number($('spacing').value),Number($('fontSize').value)+2),margin=30,rowHeight=Number($('rowSpace').value),width=wrap*step+margin*2,height=Math.ceil(count/wrap)*rowHeight+72;
+function inspect(i,focus=false){selected=i;const r=current[i];$('rangeStart').value=r.n;$('rangeEnd').value=r.n;$('assignment').value=r.ss==='-'?'.':r.ss;$('detail').textContent=`Chain ${r.chain} · Residue ${r.n} · ${r.res} (${aa[r.res]||'X'}) · ${names[r.ss]} · Code ${r.ss}${r.elementId?` · File element ${r.elementId}`:""}${r.sheet?` · Sheet ${r.sheet}, strand ${r.strandId}`:""}${r.ss!==r.originalSS?" · Drawing overridden":""}`;document.querySelectorAll('.residue.selected').forEach(n=>n.classList.remove('selected'));const g=$('r'+i);g.classList.add('selected');document.querySelectorAll('.residue').forEach(n=>n.setAttribute('tabindex','-1'));g.setAttribute('tabindex','0');if(focus){g.focus();g.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'})}}
+function render(){if(!all.length){$('stats').replaceChildren();$('title').textContent='Your sequence';$('canvas').textContent='Choose a CIF file, then select Run viewer to create your editable picture.';$('detail').textContent='Your data stays in this browser.';$('export').disabled=true;return}$('export').disabled=false;current=all.filter(r=>r.chain===$('chain').value);selected=-1;const count=current.length,wrap=Number($('wrap').value),step=Math.max(Number($('spacing').value),Number($('fontSize').value)+2),margin=30,rowHeight=Number($('rowSpace').value)+($('elementNames').checked?48:0),width=wrap*step+margin*2,height=Math.ceil(count/wrap)*rowHeight+120;
 const colors={helix:$('helixColor').value,strand:$('strandColor').value,loop:$('loopColor').value};document.querySelectorAll('.legend span').forEach((span,i)=>span.style.setProperty('--c',Object.values(colors)[i]));const edits=all.filter(r=>r.ss!==r.originalSS).length;$('editStatus').textContent=edits?`${edits} residue(s) have structure overrides. Statistics reflect your edits.`:'No structure overrides.';
 $('title').textContent=`Chain ${$('chain').value} · ${current[0].n}–${current.at(-1).n}`;
 $('stats').replaceChildren();for(const [label,num]of [['Residues',count],['Helix',current.filter(r=>kind(r.ss)==='helix').length],['β-strand',current.filter(r=>kind(r.ss)==='strand').length],['Loop / other',current.filter(r=>kind(r.ss)==='loop').length]]){const d=document.createElement('div'),b=document.createElement('b');b.textContent=label==='Residues'?num:`${(num/count*100).toFixed(1)}%`;d.append(b,document.createTextNode(label));$('stats').append(d)}
 const svg=el('svg',{xmlns:NS,width,height,viewBox:`0 0 ${width} ${height}`,role:'group','aria-label':'Secondary structure aligned above amino acid sequence'});svg.append(el('rect',{width,height,fill:'white'}));svg.append(el('text',{x:margin,y:28,'font-family':'Arial','font-size':20,fill:'#142d44'},$('figureTitle').value));svg.append(el('text',{x:margin,y:49,'font-family':'Arial','font-size':12,fill:'#607589'},`Chain ${$('chain').value} · Helix / β-strand / loop${edits?' · Edited assignments':''}`));
-for(let lo=0;lo<count;lo+=wrap){const hi=Math.min(count,lo+wrap),y=Math.floor(lo/wrap)*rowHeight+92;svg.append(el('line',{x1:margin-8,x2:margin+(hi-lo-1)*step+8,y1:y,y2:y,stroke:colors.loop,'stroke-width':2}));for(let i=lo;i<hi;){let end=i+1;while(end<hi&&current[end].ss===current[i].ss&&current[end].n===current[end-1].n+1)end++;const k=kind(current[i].ss),x0=margin+(i-lo)*step-7,x1=margin+(end-lo-1)*step+7;
-if(k==='helix'){let d='';for(let x=x0;x<=x1;x+=0.5){const yy=y+9*Math.sin((x-margin+lo*step)/step*2*Math.PI);d+=(d?' L':'M')+x+' '+yy}svg.append(el('path',{d,fill:'none',stroke:colors.helix,'stroke-width':4,'stroke-linecap':'round'}))}
-else if(k==='strand'){const continues=end<count&&current[end].ss===current[end-1].ss&&current[end].n===current[end-1].n+1;const head=continues?0:Math.min(12,(x1-x0)*.7);const points=head?`${x0},${y-5} ${x1-head},${y-5} ${x1-head},${y-11} ${x1},${y} ${x1-head},${y+11} ${x1-head},${y+5} ${x0},${y+5}`:`${x0},${y-5} ${x1},${y-5} ${x1},${y+5} ${x0},${y+5}`;svg.append(el('polygon',{points,fill:colors.strand}))}i=end}
+for(let lo=0;lo<count;lo+=wrap){const lanes=[];const hi=Math.min(count,lo+wrap),y=Math.floor(lo/wrap)*rowHeight+140;svg.append(el('line',{x1:margin-8,x2:margin+(hi-lo-1)*step+8,y1:y,y2:y,stroke:colors.loop,'stroke-width':2}));for(let i=lo;i<hi;){let end=i+1;while(end<hi&&current[end].ss===current[i].ss&&labelFor(current[end])===labelFor(current[i])&&current[end].n===current[end-1].n+1)end++;const k=kind(current[i].ss),x0=margin+(i-lo)*step-7,x1=margin+(end-lo-1)*step+7;
+if($('elementNames').checked&&labelFor(current[i])){
+ const label=labelFor(current[i]),labelWidth=label.length*7+8,cx=Math.max(labelWidth/2+4,Math.min(width-labelWidth/2-4,(x0+x1)/2));let lane=0;while(lanes[lane]!==undefined&&lanes[lane]>cx-labelWidth/2)lane++;lanes[lane]=cx+labelWidth/2+5;
+ const labelY=y-22-lane*16;const t=el('text',{x:cx,y:labelY,'text-anchor':'middle','font-family':'Arial','font-size':12,fill:'#142d44',class:'element-label'},label);t.append(el('title',{},(current[i].elementId||'Edited structure')+(current[i].sheet?' · Sheet '+current[i].sheet:'')));svg.append(t);
+}
+if(k==='helix'){
+ if(current[i].ss==='H'){
+  const turns=Math.max(1,Math.round((x1-x0)/22)),pitch=(x1-x0)/turns,band=5,amp=10;
+  const ribbon=(a,b,rising)=>{const ya=y+(rising?amp:-amp),yb=y+(rising?-amp:amp),dx=(b-a)*.52;
+   return `M ${a} ${ya-band/2} C ${a+dx} ${ya-band/2},${b-dx} ${yb-band/2},${b} ${yb-band/2} L ${b} ${yb+band/2} C ${b-dx} ${yb+band/2},${a+dx} ${ya+band/2},${a} ${ya+band/2} Z`};
+  for(let t=0;t<turns;t++){const a=x0+t*pitch;svg.append(el('path',{d:ribbon(a,a+pitch*.28,false),fill:colors.helix,'fill-opacity':.28,stroke:'#263340','stroke-width':1.3,'stroke-linejoin':'round'}))}
+  for(let t=0;t<turns;t++){const a=x0+t*pitch;svg.append(el('path',{d:ribbon(a+pitch*.28,a+pitch,true),fill:colors.helix,stroke:'#263340','stroke-width':1.5,'stroke-linejoin':'round'}))}
+ }else{let d='';for(let x=x0;x<=x1;x+=.5){const yy=y+9*Math.sin((x-margin+lo*step)/step*2*Math.PI);d+=(d?' L':'M')+x+' '+yy}svg.append(el('path',{d,fill:'none',stroke:colors.helix,'stroke-width':4,'stroke-linecap':'round'}))}
+}
+else if(k==='strand'){const continues=end<count&&current[end].ss===current[end-1].ss&&labelFor(current[end])===labelFor(current[end-1])&&current[end].n===current[end-1].n+1;const head=continues?0:Math.min(12,(x1-x0)*.7);const points=head?`${x0},${y-5} ${x1-head},${y-5} ${x1-head},${y-11} ${x1},${y} ${x1-head},${y+11} ${x1-head},${y+5} ${x0},${y+5}`:`${x0},${y-5} ${x1},${y-5} ${x1},${y+5} ${x0},${y+5}`;svg.append(el('polygon',{points,fill:colors.strand}))}i=end}
 for(let i=lo;i<hi;i++){const r=current[i],x=margin+(i-lo)*step;const g=el('g',{id:'r'+i,class:'residue',tabindex:i===0?'0':'-1',role:'button','aria-label':`${r.res} ${r.n}, ${names[r.ss]}`});g.append(el('rect',{x:x-8,y:y+17,width:16,height:27,rx:4,fill:'transparent'}),el('text',{x,y:y+36,'text-anchor':'middle','font-family':'monospace','font-size':Number($('fontSize').value),fill:'#142d44'},aa[r.res]||'X'),el('title',{},`${r.res} ${r.n} · ${names[r.ss]}`));g.addEventListener('click',()=>inspect(i));g.addEventListener('focus',()=>inspect(i));g.addEventListener('keydown',e=>{if(['ArrowRight','ArrowLeft','Enter',' '].includes(e.key)){e.preventDefault();inspect(Math.max(0,Math.min(count-1,i+(e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0))),true)}});svg.append(g);if($('numbers').checked&&(i===lo||i===hi-1||(r.n%10===0&&i-lo>2&&hi-1-i>2)))svg.append(el('text',{x,y:y+65,'text-anchor':'middle','font-family':'Arial','font-size':12,fill:'#607589'},r.n))}}
 $('canvas').replaceChildren(svg);$('detail').textContent='Select a residue to inspect its position and structure. Use left and right arrow keys to move along the sequence.'}
 function refreshPicture(){const i=selected;render();if(i>=0&&i<current.length)inspect(i)}
-for(const id of ['figureTitle','helixColor','strandColor','loopColor','fontSize','spacing','rowSpace','numbers'])$(id).addEventListener('input',()=>{if($(id+'Value'))$(id+'Value').textContent=$(id).value;refreshPicture()});
-$('resetStyle').onclick=()=>{for(const [id,value] of Object.entries({figureTitle:'Secondary structure',helixColor:'#c65274',strandColor:'#ce920d',loopColor:'#8293a4',fontSize:16,spacing:18,rowSpace:112})){$(id).value=value;if($(id+'Value'))$(id+'Value').textContent=value}$('numbers').checked=true;refreshPicture()};
+for(const id of ['figureTitle','helixColor','strandColor','loopColor','fontSize','spacing','rowSpace','numbers','elementNames'])$(id).addEventListener('input',()=>{if($(id+'Value'))$(id+'Value').textContent=$(id).value;refreshPicture()});
+$('resetStyle').onclick=()=>{for(const [id,value] of Object.entries({figureTitle:'Secondary structure',helixColor:'#c65274',strandColor:'#ce920d',loopColor:'#8293a4',fontSize:16,spacing:18,rowSpace:112})){$(id).value=value;if($(id+'Value'))$(id+'Value').textContent=value}$('numbers').checked=true;$('elementNames').checked=true;refreshPicture()};
 function saveHistory(){history.push(all.map(r=>r.ss));$('undoEdit').disabled=false}
 $('applyRange').onclick=()=>{const start=Number($('rangeStart').value),end=Number($('rangeEnd').value);if(!$('rangeStart').value||!$('rangeEnd').value||!Number.isInteger(start)||!Number.isInteger(end)||start>end||!current.some(r=>r.n===start)||!current.some(r=>r.n===end)){$('message').textContent='Choose valid start and end residues in the current chain.';return}saveHistory();current.filter(r=>r.n>=start&&r.n<=end).forEach(r=>r.ss=$('assignment').value);$('message').textContent='';render();$('rangeStart').value=start;$('rangeEnd').value=end};
 $('undoEdit').onclick=()=>{const previous=history.pop();if(!previous)return;all.forEach((r,i)=>r.ss=previous[i]);$('undoEdit').disabled=!history.length;render()};
